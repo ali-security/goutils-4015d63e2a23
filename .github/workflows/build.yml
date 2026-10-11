@@ -1,0 +1,62 @@
+name: build
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+
+      - name: Compile check (GOPATH mode, no go.mod)
+        run: GO111MODULE=off go build -v ./...
+
+      - name: Pack module zip
+        run: |
+          MODZIP_DIR="${{ runner.temp }}/modzip"
+          mkdir -p "$MODZIP_DIR"
+          cat > "$MODZIP_DIR/create_mod.go" <<'EOF'
+          package main
+
+          import (
+              "log"
+              "os"
+
+              "golang.org/x/mod/module"
+              "golang.org/x/mod/zip"
+          )
+
+          func main() {
+              m := module.Version{Path: os.Args[1], Version: os.Args[2]}
+              f, err := os.Create(os.Args[4])
+              if err != nil {
+                  log.Fatal(err)
+              }
+              defer f.Close()
+              if err := zip.CreateFromDir(f, m, os.Args[3]); err != nil {
+                  log.Fatal(err)
+              }
+              log.Printf("created module zip: %s", os.Args[4])
+          }
+          EOF
+          MODSRC="${{ runner.temp }}/modsrc"
+          mkdir -p "$MODSRC"
+          rsync -a --exclude='/.git' --exclude='/.github' "$GITHUB_WORKSPACE/" "$MODSRC/"
+          cd "$MODZIP_DIR"
+          go mod init example.com/modzip
+          go get golang.org/x/mod@v0.14.0
+          mkdir -p "${{ runner.temp }}/build_output"
+          go run . github.com/Masterminds/goutils v1.1.0 "$MODSRC" "${{ runner.temp }}/build_output/v1.1.0.zip"
+          unzip -l "${{ runner.temp }}/build_output/v1.1.0.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/build_output/v1.1.0.zip
+          if-no-files-found: error
